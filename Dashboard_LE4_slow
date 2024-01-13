@@ -1,0 +1,187 @@
+# Import necessary libraries
+import dash
+from dash import dcc
+from dash import html
+import plotly.express as px
+import pandas as pd
+from dash.dependencies import Input, Output, State
+
+# Load sample data
+df_gdp = pd.read_pickle('data_gapminder_join_slow.pkl')
+
+# convert year to int
+df_gdp.year = df_gdp.year.astype(int)
+
+# Create a Dash app
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
+
+# Shared year-slider for all pages
+year_slider = html.Div([
+    html.Label("Select a year:"),
+    dcc.Slider(
+        id='year-slider',
+        min=df_gdp['year'].min(),
+        max=df_gdp['year'].max(),
+        value=df_gdp['year'].max(),
+        marks={str(year): str(year) for year in df_gdp['year'].unique()},
+        step=None
+    )
+], style={'width': '80%', 'marginLeft': '20%', 'marginRight': '0', 'marginBottom': '20px'})
+
+app.layout = html.Div([
+    dcc.Location(id='url', refresh=False),
+    dcc.Store(id='shared-data', storage_type='session'),
+    year_slider,  # Placing the year-slider here, so it's always in the layout
+    html.Div([
+        html.Div([
+            html.H2("Menu", style={'text-align': 'center'}),
+            dcc.Link("Home", href="/", style={
+                'display': 'block', 
+                'margin': '10px 0', 
+                'text-align': 'center', 
+                'font-family': 'Arial, sans-serif', 
+                'font-size': '20px'
+            }),
+            dcc.Link("Map Page", href="/map", style={
+                'display': 'block', 
+                'margin': '10px 0', 
+                'text-align': 'center', 
+                'font-family': 'Arial, sans-serif', 
+                'font-size': '20px'
+            }),
+        ], style={
+            'width': '20%', 
+            'height': '100vh', 
+            'position': 'fixed', 
+            'zIndex': 1,
+            'top': '0', 
+            'left': '0', 
+            'background-color': '#f8f9fa',
+            'overflow-x': 'hidden', 
+            'padding-top': '20px'
+        }),
+    ]),
+    html.Div(id='page-content', style={'marginLeft': '20%', 'width': '80%', 'height': '60vh'})
+])
+
+@app.callback(
+    Output('page-content', 'children'),
+    [Input('url', 'pathname'),
+     Input('shared-data', 'data')])
+def display_page(pathname, data):
+    selected_year = data.get('selected_year', df_gdp['year'].max()) if data else df_gdp['year'].max()
+
+    # Filters for top left and bottom right
+    top_left_filter = html.Div([
+        html.Label("Select a continent:"),
+        dcc.Dropdown(
+            id='continent-dropdown',
+            options=[{'label': continent, 'value': continent} for continent in df_gdp['continent'].unique()],
+            value=df_gdp['continent'].unique()[0]
+        ),
+    ], style={'margin': '10px'})
+
+
+    bottom_right_filter = html.Div([
+        html.Label("Select a country:"),
+        dcc.Dropdown(
+            id='country-dropdown',
+            options=[{'label': country, 'value': country} for country in df_gdp['country'].unique()],
+            value=df_gdp['country'].unique()[0]
+        ),
+    ], style={'position': 'absolute', 'bottom': 0, 'left': 0})
+
+    # Visualization content
+    visualization_content = html.Div([
+        dcc.Graph(id='graph'),
+        dcc.Graph(id='bar-chart')
+    ], style={'display': 'flex', 'flexDirection': 'column', 'alignItems': 'center'})
+
+    if pathname == '/map':
+        return html.Div([
+            top_left_filter,
+            dcc.Graph(id='map-graph'),  # Assign the correct ID here
+        ], style={'position': 'central', 'margin-left':'400px', 'height': '100vh'})
+    else:
+        # Home page content
+        return html.Div([
+            top_left_filter, 
+            visualization_content
+        ], style={'position': 'relative', 'height': '100vh'})
+
+    # Other components of the page layout...
+
+
+
+
+@app.callback(
+    Output('shared-data', 'data'),
+    [Input('year-slider', 'value')],
+    [State('shared-data', 'data')])
+def update_store(selected_year, data):
+    if data is None:
+        data = {}
+    data['selected_year'] = selected_year
+    return data
+
+
+# Define the callback for the map-graph - assuming you only want to show it on the map page
+@app.callback(
+    Output('map-graph', 'figure'),
+    [Input('url', 'pathname'),
+     Input('year-slider', 'value')],
+     State('shared-data', 'data'))  # The shared data store is also a state)
+def update_map(pathname, selected_year, data):
+    if pathname == '/map':
+        # Assuming you want to display the latest year's data on the map
+        data = df_gdp[df_gdp['year'] == selected_year]
+
+        # Create the map figure
+        map_fig = px.choropleth(data, locations='alpha-3', hover_name='country',
+                        color='gdpPercap', color_continuous_scale=px.colors.sequential.Plasma)
+
+        # Update color bar size
+        map_fig.update_layout(
+            coloraxis_colorbar=dict(
+                thickness=10,  # Adjust the thickness of the color bar (in pixels)
+                len=0.3,  # Adjust the length of the color bar (fraction of the plot height)
+                title='GDP per Capita',  # Color bar title
+                titleside='right'
+            ),
+            transition_duration=500,
+            width=600,  # Set the width of the map
+            height=600,
+            margin=dict(l=0, r=0, t=0, b=0) # Set the height of the map
+            )
+        
+        return map_fig
+    return {}
+
+
+@app.callback(
+    Output('graph', 'figure'),
+    [Input('year-slider', 'value'),
+    Input('continent-dropdown', 'value')])
+def update_scatter(selected_year, selected_continent):
+    filtered_df = df_gdp[(df_gdp['year'] == selected_year) & (df_gdp['continent'] == selected_continent)]
+    scatter_fig = px.scatter(filtered_df, x='gdpPercap', y='lifeExp', size='pop', hover_name='country')
+    scatter_fig.update_layout(transition_duration=500)
+    return scatter_fig
+
+# Callback for bar chart
+@app.callback(
+    Output('bar-chart', 'figure'),
+    [Input('year-slider', 'value'),
+    Input('continent-dropdown', 'value')])
+def update_bar(selected_year, selected_continent):
+    filtered_df = df_gdp[(df_gdp['year'] == selected_year) & (df_gdp['continent'] == selected_continent)]
+    bar_fig = px.bar(filtered_df, x='country', y='pop')
+    bar_fig.update_layout(transition_duration=500)
+    return bar_fig
+
+# Define the callbacks for the scatterplot and bar chart as before
+# ...
+
+# Run the app
+if __name__ == '__main__':
+    app.run_server(debug=True)
